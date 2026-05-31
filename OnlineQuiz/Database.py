@@ -28,19 +28,6 @@ def get_cursor():
 # ── Schema bootstrap ───────────────────────────────────────────────────────────
 
 def ensure_scores_table():
-    """
-    Create the quiz_scores table if it does not exist yet.
-    Columns
-    -------
-    id            – auto PK
-    username      – player's username
-    topic         – which topic table was used (ai, python, …)
-    difficulty    – Easy / Medium / Hard
-    score         – correct answers out of 15
-    total         – always 15
-    time_taken_s  – seconds the candidate spent (max 300)
-    completed_at  – UTC timestamp of submission
-    """
     db  = get_db()
     cur = get_cursor()
     cur.execute("""
@@ -72,7 +59,7 @@ def find_user_by_username(username: str):
     return cur.fetchone()
 
 
-def find_email_by_identifier(identifier: str) -> str | None:
+def find_email_by_identifier(identifier: str):
     cur = get_cursor()
     cur.execute("SELECT mail FROM signup WHERE mail = %s", (identifier,))
     row = cur.fetchone()
@@ -119,13 +106,7 @@ def update_password(email: str, new_password: str):
 VALID_TOPICS = {"ai", "python", "java", "web_development", "cpp", "ethical_hacking"}
 
 
-def fetch_random_questions(topic: str, difficulty: str, n: int = 15) -> list[dict]:
-    """
-    Return *n* random questions from the given topic table filtered by difficulty.
-    Each row is returned as a dict with keys:
-      id, difficulty, question, option_a, option_b, option_c, option_d,
-      correct_answer, explanation
-    """
+def fetch_random_questions(topic: str, difficulty: str, n: int = 15) -> list:
     if topic not in VALID_TOPICS:
         raise ValueError(f"Unknown topic: {topic}")
     cur = get_cursor()
@@ -149,7 +130,6 @@ def fetch_random_questions(topic: str, difficulty: str, n: int = 15) -> list[dic
 
 def save_score(username: str, topic: str, difficulty: str,
                score: int, total: int, time_taken_s: int):
-    """Insert one quiz result row."""
     ensure_scores_table()
     db  = get_db()
     cur = get_cursor()
@@ -162,11 +142,7 @@ def save_score(username: str, topic: str, difficulty: str,
     db.commit()
 
 
-def get_user_history(username: str) -> list[dict]:
-    """
-    Return all quiz attempts for this user, newest first.
-    Columns: topic, difficulty, score, total, time_taken_s, completed_at
-    """
+def get_user_history(username: str) -> list:
     ensure_scores_table()
     cur = get_cursor()
     cur.execute(
@@ -180,11 +156,7 @@ def get_user_history(username: str) -> list[dict]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def get_leaderboard(limit: int = 20) -> list[dict]:
-    """
-    Global leaderboard: ranked by score DESC, then time_taken_s ASC (faster wins ties).
-    Columns: rank, username, topic, difficulty, score, total, time_taken_s, completed_at
-    """
+def get_leaderboard(limit: int = 200) -> list:
     ensure_scores_table()
     cur = get_cursor()
     cur.execute(

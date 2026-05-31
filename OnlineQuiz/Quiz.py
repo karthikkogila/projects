@@ -1,42 +1,36 @@
-# Quiz.py — Quiz engine page (imported and called from App.py)
+# Quiz.py — Quiz engine: select, history, leaderboard phases.
+# Playing + Result are handled by Play.render() called inline.
 
 import time
 import streamlit as st
-from Database import (
-    fetch_random_questions,
-    save_score,
-    get_user_history,
-    get_leaderboard,
-)
-
-QUIZ_DURATION   = 5 * 60   # 300 seconds
-TOTAL_QUESTIONS = 15
+from Database import fetch_random_questions, get_user_history
+from Leaderboard import page_leaderboard
+from Config import QUIZ_DURATION, TOTAL_QUESTIONS
+import Play
 
 TOPIC_META = {
-    "ai":               {"icon": "🤖", "label": "Artificial Intelligence"},
-    "python":           {"icon": "🐍", "label": "Python"},
-    "java":             {"icon": "☕", "label": "Java"},
-    "web_development":  {"icon": "🌐", "label": "Web Development"},
-    "cpp":              {"icon": "⚙️",  "label": "C++"},
-    "ethical_hacking":  {"icon": "🛡️",  "label": "Ethical Hacking"},
+    "ai":              {"icon": "🤖", "label": "Artificial Intelligence"},
+    "python":          {"icon": "🐍", "label": "Python"},
+    "java":            {"icon": "☕", "label": "Java"},
+    "web_development": {"icon": "🌐", "label": "Web Development"},
+    "cpp":             {"icon": "⚙️",  "label": "C++"},
+    "ethical_hacking": {"icon": "🛡️",  "label": "Ethical Hacking"},
 }
-
-DIFF_COLORS = {"Easy": "easy", "Medium": "medium", "Hard": "hard"}
 
 
 # ── Session helpers ────────────────────────────────────────────────────────────
 
 def _init_quiz_state():
     defaults = {
-        "quiz_phase":       "select",   # select | playing | result | history | leaderboard
-        "quiz_topic":       None,
-        "quiz_difficulty":  None,
-        "quiz_questions":   [],         # list[dict] – 15 questions
-        "quiz_answers":     {},         # {idx: 'A'|'B'|'C'|'D'}
-        "quiz_start_time":  None,       # float – time.time()
-        "quiz_q_index":     0,          # current question (0-based)
-        "quiz_submitted":   False,      # True once user clicks Submit
-        "quiz_time_up":     False,
+        "quiz_phase":      "select",
+        "quiz_topic":      None,
+        "quiz_difficulty": None,
+        "quiz_questions":  [],
+        "quiz_answers":    {},
+        "quiz_start_time": None,
+        "quiz_q_index":    0,
+        "quiz_submitted":  False,
+        "quiz_time_up":    False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -44,15 +38,13 @@ def _init_quiz_state():
 
 
 def _reset_quiz():
-    """Wipe temporary quiz state so user can start fresh."""
     keys = [
-        "quiz_phase","quiz_topic","quiz_difficulty","quiz_questions",
-        "quiz_answers","quiz_start_time","quiz_q_index",
-        "quiz_submitted","quiz_time_up",
+        "quiz_phase", "quiz_topic", "quiz_difficulty", "quiz_questions",
+        "quiz_answers", "quiz_start_time", "quiz_q_index",
+        "quiz_submitted", "quiz_time_up",
     ]
     for k in keys:
-        if k in st.session_state:
-            del st.session_state[k]
+        st.session_state.pop(k, None)
     _init_quiz_state()
 
 
@@ -61,114 +53,161 @@ def _fmt_time(seconds: int) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def _elapsed() -> int:
-    if st.session_state.quiz_start_time is None:
-        return 0
-    return int(time.time() - st.session_state.quiz_start_time)
-
-
-def _remaining() -> int:
-    return max(QUIZ_DURATION - _elapsed(), 0)
-
-
-def _score() -> int:
-    correct = 0
-    for idx, chosen in st.session_state.quiz_answers.items():
-        q = st.session_state.quiz_questions[idx]
-        if chosen == q["correct_answer"]:
-            correct += 1
-    return correct
-
-
-# ── Phase: Select topic & difficulty ──────────────────────────────────────────
+# ── Phase: Select ──────────────────────────────────────────────────────────────
+# The ENTIRE select page lives inside one st.empty() slot.
+# When Start is clicked we call slot.empty() which physically removes every
+# widget from the page before st.rerun() fires — no bleed-through possible.
 
 def _phase_select():
-    st.markdown(
-        "<h1 style='text-align:center;margin-bottom:0'>🧠 Online Quiz</h1>"
-        "<p style='text-align:center;color:var(--text-dim);margin-top:.3rem;font-family:var(--font-mono)'>"
-        "15 questions · 5 minutes · Choose your arena</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("<br>", unsafe_allow_html=True)
+    slot = st.empty()           # one DOM slot that owns ALL select-page content
 
-    # ── Topic selection ──
-    st.markdown("### 📚 Select Topic")
-    cols = st.columns(3)
-    for i, (key, meta) in enumerate(TOPIC_META.items()):
-        col = cols[i % 3]
-        selected = st.session_state.quiz_topic == key
-        border = "var(--accent)" if selected else "var(--border)"
-        bg     = "rgba(124,92,252,.12)" if selected else "var(--surface)"
-        col.markdown(
-            f"""<div style='background:{bg};border:1.5px solid {border};
-                border-radius:18px;padding:1.2rem 0.8rem;text-align:center;
-                margin-bottom:0.4rem;transition:all .2s'>
-                <div style='font-size:1.9rem'>{meta['icon']}</div>
-                <div style='font-weight:700;font-size:.85rem;letter-spacing:.04em;margin-top:.3rem'>
-                    {meta['label']}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-        if col.button(
-            "✓ Selected" if selected else "Select",
-            key=f"tp_{key}",
-            use_container_width=True,
-        ):
-            st.session_state.quiz_topic = key
+    with slot.container():
+
+        # ── Header ──
+        st.markdown("""
+            <div style='text-align:center;padding:2rem 0 1.5rem'>
+                <div style='font-size:3.5rem;margin-bottom:.5rem'>🧠</div>
+                <h1 style='font-size:2.4rem;font-weight:800;margin:0;
+                           letter-spacing:-0.03em;color:#e8e8f0'>Online Quiz</h1>
+                <p style='color:#7a7a9a;font-family:monospace;margin:.5rem 0 0;font-size:.9rem'>
+                    15 questions &nbsp;·&nbsp; 5 minutes &nbsp;·&nbsp; Choose your arena
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # ── Step 1: Topic ──
+        st.markdown("""
+            <div style='display:flex;align-items:center;gap:.6rem;margin-bottom:1rem'>
+                <div style='background:#7c5cfc;color:#fff;font-size:.7rem;font-weight:800;
+                            width:22px;height:22px;border-radius:50%;display:flex;
+                            align-items:center;justify-content:center;flex-shrink:0'>1</div>
+                <span style='font-weight:700;font-size:1rem;color:#e8e8f0'>Select Topic</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        cols = st.columns(3)
+        topic_clicked = False
+        for i, (key, meta) in enumerate(TOPIC_META.items()):
+            col      = cols[i % 3]
+            selected = st.session_state.quiz_topic == key
+            border   = "#7c5cfc" if selected else "#2a2a3d"
+            bg       = "rgba(124,92,252,.13)" if selected else "#12121a"
+            glow     = "box-shadow:0 0 0 3px rgba(124,92,252,.25);" if selected else ""
+            col.markdown(f"""
+                <div style='background:{bg};border:1.5px solid {border};border-radius:16px;
+                            padding:1.1rem .7rem;text-align:center;margin-bottom:.3rem;
+                            transition:all .15s;{glow}'>
+                    <div style='font-size:1.8rem'>{meta['icon']}</div>
+                    <div style='font-weight:700;font-size:.8rem;margin-top:.35rem;
+                                color:#e8e8f0;letter-spacing:.03em'>{meta['label']}</div>
+                    {'<div style="margin-top:.4rem;font-size:.65rem;color:#7c5cfc;font-weight:700">✓ SELECTED</div>' if selected else ''}
+                </div>
+            """, unsafe_allow_html=True)
+            if col.button("Select" if not selected else "✓ Selected",
+                          key=f"tp_{key}", use_container_width=True):
+                st.session_state.quiz_topic = key
+                topic_clicked = True
+
+        if topic_clicked:
+            slot.empty()        # wipe page before rerun
             st.rerun()
+            st.stop()
 
-    st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-    # ── Difficulty selection ──
-    st.markdown("### 🎯 Select Difficulty")
-    diff_cols = st.columns(3)
-    diffs = [
-        ("Easy",   "🟢", "Beginner-friendly",  "var(--easy)"),
-        ("Medium", "🟡", "Intermediate level", "var(--medium)"),
-        ("Hard",   "🔴", "Expert challenge",   "var(--hard)"),
-    ]
-    for col, (diff, emoji, desc, color) in zip(diff_cols, diffs):
-        selected = st.session_state.quiz_difficulty == diff
-        border   = color if selected else "var(--border)"
-        bg       = f"rgba({_hex_to_rgb(color)},.1)" if selected else "var(--surface)"
-        col.markdown(
-            f"""<div style='background:{bg};border:1.5px solid {border};
-                border-radius:14px;padding:1rem;text-align:center;margin-bottom:.4rem'>
-                <div style='font-size:1.5rem'>{emoji}</div>
-                <div style='font-weight:700;color:{color};font-size:.9rem'>{diff}</div>
-                <div style='font-size:.75rem;color:var(--text-dim);margin-top:.2rem'>{desc}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-        if col.button(
-            "✓ Chosen" if selected else "Choose",
-            key=f"df_{diff}",
-            use_container_width=True,
-        ):
-            st.session_state.quiz_difficulty = diff
+        # ── Step 2: Difficulty ──
+        st.markdown("""
+            <div style='display:flex;align-items:center;gap:.6rem;margin-bottom:1rem'>
+                <div style='background:#7c5cfc;color:#fff;font-size:.7rem;font-weight:800;
+                            width:22px;height:22px;border-radius:50%;display:flex;
+                            align-items:center;justify-content:center;flex-shrink:0'>2</div>
+                <span style='font-weight:700;font-size:1rem;color:#e8e8f0'>Select Difficulty</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        diff_meta = [
+            ("Easy",   "🟢", "Beginner friendly",  "#5cf8b0", "92,248,176"),
+            ("Medium", "🟡", "Intermediate level", "#fcb05c", "252,176,92"),
+            ("Hard",   "🔴", "Expert challenge",   "#fc5c7d", "252,92,125"),
+        ]
+        dcols = st.columns(3)
+        diff_clicked = False
+        for col, (diff, emoji, desc, color, rgb) in zip(dcols, diff_meta):
+            selected = st.session_state.quiz_difficulty == diff
+            border   = color if selected else "#2a2a3d"
+            bg       = f"rgba({rgb},.1)" if selected else "#12121a"
+            glow     = f"box-shadow:0 0 0 3px rgba({rgb},.2);" if selected else ""
+            col.markdown(f"""
+                <div style='background:{bg};border:1.5px solid {border};border-radius:16px;
+                            padding:1rem .8rem;text-align:center;margin-bottom:.3rem;
+                            transition:all .15s;{glow}'>
+                    <div style='font-size:1.5rem'>{emoji}</div>
+                    <div style='font-weight:800;color:{color};font-size:.9rem;margin-top:.3rem'>{diff}</div>
+                    <div style='font-size:.72rem;color:#7a7a9a;margin-top:.2rem'>{desc}</div>
+                </div>
+            """, unsafe_allow_html=True)
+            if col.button("Choose" if not selected else "✓ Chosen",
+                          key=f"df_{diff}", use_container_width=True):
+                st.session_state.quiz_difficulty = diff
+                diff_clicked = True
+
+        if diff_clicked:
+            slot.empty()        # wipe page before rerun
             st.rerun()
+            st.stop()
 
-    st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
 
-    # ── Start button ──
-    start_ready = st.session_state.quiz_topic and st.session_state.quiz_difficulty
-    if st.button(
-        "🚀  Start Quiz" if start_ready else "Select topic & difficulty to begin",
-        use_container_width=True,
-        disabled=not start_ready,
-    ):
-        qs = fetch_random_questions(
-            st.session_state.quiz_topic,
-            st.session_state.quiz_difficulty,
-            TOTAL_QUESTIONS,
-        )
-        if len(qs) < TOTAL_QUESTIONS:
-            st.error(
-                f"Not enough questions in the database for "
-                f"{st.session_state.quiz_topic} / {st.session_state.quiz_difficulty}. "
-                f"Found {len(qs)}, need {TOTAL_QUESTIONS}."
-            )
+        # ── Step 3: Start ──
+        topic    = st.session_state.quiz_topic
+        diff_sel = st.session_state.quiz_difficulty
+        ready    = bool(topic and diff_sel)
+
+        if not ready:
+            missing = []
+            if not topic:    missing.append("a topic")
+            if not diff_sel: missing.append("a difficulty")
+            st.markdown(f"""
+                <div style='text-align:center;padding:.6rem;background:#1c1c2a;
+                            border-radius:10px;border:1px dashed #2a2a3d;margin-bottom:1rem'>
+                    <span style='color:#7a7a9a;font-size:.82rem;font-family:monospace'>
+                        Please select {" and ".join(missing)} to continue
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
         else:
+            t_label = TOPIC_META[topic]["label"]
+            t_icon  = TOPIC_META[topic]["icon"]
+            d_color = {"Easy": "#5cf8b0", "Medium": "#fcb05c", "Hard": "#fc5c7d"}.get(diff_sel, "#aaa")
+            st.markdown(f"""
+                <div style='text-align:center;padding:.6rem;background:#1c1c2a;
+                            border-radius:10px;border:1px solid #2a2a3d;margin-bottom:1rem'>
+                    <span style='color:#7a7a9a;font-size:.82rem;font-family:monospace'>
+                        {t_icon} {t_label} &nbsp;·&nbsp;
+                        <span style='color:{d_color}'>{diff_sel}</span>
+                        &nbsp;·&nbsp; {TOTAL_QUESTIONS} questions &nbsp;·&nbsp; 5 min
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
+
+        if st.button(
+            "🚀  Start Quiz" if ready else "Select topic & difficulty to begin",
+            use_container_width=True,
+            disabled=not ready,
+            key="start_quiz_btn",
+            type="primary" if ready else "secondary",
+        ):
+            with st.spinner("Loading questions…"):
+                qs = fetch_random_questions(topic, diff_sel, TOTAL_QUESTIONS)
+
+            if len(qs) < TOTAL_QUESTIONS:
+                st.error(
+                    f"Not enough questions for {TOPIC_META[topic]['label']} / {diff_sel}. "
+                    f"Found {len(qs)}, need {TOTAL_QUESTIONS}."
+                )
+                st.stop()
+
+            # Set quiz state
             st.session_state.quiz_questions  = qs
             st.session_state.quiz_answers    = {}
             st.session_state.quiz_q_index    = 0
@@ -176,409 +215,123 @@ def _phase_select():
             st.session_state.quiz_time_up    = False
             st.session_state.quiz_start_time = time.time()
             st.session_state.quiz_phase      = "playing"
+
+            # ── DESTROY the select page completely before rerun ──
+            slot.empty()
             st.rerun()
+            st.stop()
 
-    st.divider()
-    col1, col2 = st.columns(2)
-    if col1.button("📜 My History", use_container_width=True):
-        st.session_state.quiz_phase = "history"
-        st.rerun()
-    if col2.button("🏆 Leaderboard", use_container_width=True):
-        st.session_state.quiz_phase = "leaderboard"
-        st.rerun()
-
-    st.divider()
-    if st.button("← Logout", use_container_width=True):
-        username = st.session_state.get("logged_in_user")
-        _reset_quiz()
-        st.session_state.page            = "login"
-        st.session_state.logged_in_user  = None
-        st.rerun()
-
-
-def _hex_to_rgb(css_var: str) -> str:
-    """Return '124,92,252' etc. for known vars – fallback gracefully."""
-    m = {
-        "var(--easy)":   "92,248,176",
-        "var(--medium)": "252,176,92",
-        "var(--hard)":   "252,92,125",
-        "var(--accent)": "124,92,252",
-    }
-    return m.get(css_var, "124,92,252")
-
-
-# ── Phase: Playing ─────────────────────────────────────────────────────────────
-
-def _phase_playing():
-    st.session_state.page = "quiz"  # Ensure we're on the quiz page
-    questions = st.session_state.quiz_questions
-    idx       = st.session_state.quiz_q_index
-    remaining = _remaining()
-
-    # Auto-submit when time is up
-    if remaining == 0 and not st.session_state.quiz_submitted:
-        st.session_state.quiz_submitted = True
-        st.session_state.quiz_time_up   = True
-        _do_submit()
-        return
-
-    # ── Timer display ──
-    pct         = remaining / QUIZ_DURATION
-    bar_color   = (
-        "var(--easy)"   if pct > 0.5 else
-        "var(--medium)" if pct > 0.25 else
-        "var(--hard)"
-    )
-    time_class  = "timer-danger" if pct < 0.2 else ""
-
-    st.markdown(
-        f"""<div style='text-align:center'>
-            <div class='timer-display {time_class}'>{_fmt_time(remaining)}</div>
-            <div class='timer-bar-container'>
-                <div class='timer-bar'
-                     style='width:{pct*100:.1f}%;background:{bar_color}'></div>
-            </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
-
-    # ── Progress dots ──
-    dots_html = "<div class='progress-dots'>"
-    for i in range(TOTAL_QUESTIONS):
-        cls = "p-dot"
-        if i == idx:
-            cls += " current"
-        elif i in st.session_state.quiz_answers:
-            cls += " answered"
-        dots_html += f"<div class='{cls}'></div>"
-    dots_html += "</div>"
-    st.markdown(dots_html, unsafe_allow_html=True)
-
-    # ── Question card ──
-    q         = questions[idx]
-    diff      = q["difficulty"]
-    diff_cls  = DIFF_COLORS.get(diff, "")
-
-    st.markdown(
-        f"""<div class='quiz-card'>
-            <div class='q-meta'>
-                <span class='q-badge'>Q {idx+1} / {TOTAL_QUESTIONS}</span>
-                <span class='q-badge diff-{diff_cls.lower()}'>{diff}</span>
-            </div>
-            <p style='font-size:1.05rem;font-weight:600;margin:0;line-height:1.5'>{q['question']}</p>
-        </div>""",
-        unsafe_allow_html=True,
-    )
-
-    # ── Options as radio buttons ──
-    options = {
-        "A": q["option_a"], "B": q["option_b"],
-        "C": q["option_c"], "D": q["option_d"],
-    }
-
-    # Build a label dict for the radio
-    radio_labels = {f"**{letter}.** {text}": letter for letter, text in options.items()}
-    current_label = None
-    currently_chosen = st.session_state.quiz_answers.get(idx)
-    if currently_chosen:
-        current_label = f"**{currently_chosen}.** {options[currently_chosen]}"
-
-    chosen_label = st.radio(
-        "Select your answer:",
-        options=list(radio_labels.keys()),
-        index=(list(radio_labels.keys()).index(current_label) if current_label else None),
-        key=f"radio_{idx}",
-        label_visibility="collapsed",
-    )
-
-    # Update session state when radio selection changes
-    chosen_letter = radio_labels.get(chosen_label)
-    st.session_state.quiz_answers[idx] = chosen_letter
-
-    # ── Navigation ──
-    nav_l, nav_m, nav_r = st.columns([1, 2, 1])
-
-    if nav_l.button("← Prev", disabled=(idx == 0), use_container_width=True):
-        st.session_state.quiz_q_index = idx - 1
-        st.rerun()
-
-    answered = len(st.session_state.quiz_answers)
-    nav_m.markdown(
-        f"<p style='text-align:center;color:var(--text-dim);font-family:var(--font-mono);font-size:.82rem;margin-top:.6rem'>"
-        f"{answered}/{TOTAL_QUESTIONS} answered</p>",
-        unsafe_allow_html=True,
-    )
-
-    if idx < TOTAL_QUESTIONS - 1:
-        if nav_r.button("Next →", use_container_width=True):
-            st.session_state.quiz_q_index = idx + 1
+        # ── Footer nav ──
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        st.divider()
+        col1, col2 = st.columns(2)
+        if col1.button("📜  My History", use_container_width=True, key="sel_hist"):
+            slot.empty()
+            st.session_state.quiz_phase = "history"
             st.rerun()
-    else:
-        if nav_r.button("✅ Submit", use_container_width=True):
-            _do_submit()
-            return
-
-    # Auto-refresh every second to keep timer live
-    time.sleep(1)
-    st.rerun()
-
-
-def _do_submit():
-    """Calculate score, persist it, move to result phase."""
-    elapsed  = _elapsed()
-    score    = _score()
-    username = st.session_state.get("logged_in_user", "anonymous")
-
-    save_score(
-        username=username,
-        topic=st.session_state.quiz_topic,
-        difficulty=st.session_state.quiz_difficulty,
-        score=score,
-        total=TOTAL_QUESTIONS,
-        time_taken_s=min(elapsed, QUIZ_DURATION),
-    )
-
-    st.session_state.quiz_phase = "result"
-    st.rerun()
-
-
-# ── Phase: Result ──────────────────────────────────────────────────────────────
-
-def _phase_result():
-    score     = _score()
-    total     = TOTAL_QUESTIONS
-    elapsed   = _elapsed()
-    questions = st.session_state.quiz_questions
-
-    pct = score / total
-    grade_emoji = "🏆" if pct >= 0.9 else "🌟" if pct >= 0.7 else "👍" if pct >= 0.5 else "📖"
-    grade_label = (
-        "Outstanding!" if pct >= 0.9 else
-        "Great job!"   if pct >= 0.7 else
-        "Good effort!" if pct >= 0.5 else
-        "Keep practising!"
-    )
-
-    if st.session_state.quiz_time_up:
-        st.warning("⏰ Time's up! Your quiz was auto-submitted.")
-
-    st.markdown(
-        f"""<div class='quiz-card' style='text-align:center;padding:2.5rem'>
-            <div style='font-size:3rem;margin-bottom:.5rem'>{grade_emoji}</div>
-            <div class='result-score'>{score} / {total}</div>
-            <div class='result-label'>{grade_label}</div>
-            <div style='margin-top:1.2rem;display:flex;gap:1.5rem;justify-content:center;flex-wrap:wrap'>
-                <div style='text-align:center'>
-                    <div style='font-family:var(--font-mono);font-size:1.3rem;font-weight:700;
-                                color:var(--accent)'>{int(pct*100)}%</div>
-                    <div style='font-size:.75rem;color:var(--text-dim)'>Accuracy</div>
-                </div>
-                <div style='text-align:center'>
-                    <div style='font-family:var(--font-mono);font-size:1.3rem;font-weight:700;
-                                color:var(--accent3)'>{_fmt_time(min(elapsed,QUIZ_DURATION))}</div>
-                    <div style='font-size:.75rem;color:var(--text-dim)'>Time taken</div>
-                </div>
-                <div style='text-align:center'>
-                    <div style='font-family:var(--font-mono);font-size:1.3rem;font-weight:700;
-                                color:var(--medium)'>{st.session_state.quiz_difficulty}</div>
-                    <div style='font-size:.75rem;color:var(--text-dim)'>Difficulty</div>
-                </div>
-            </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
-
-    # ── Answer review ──
-    with st.expander("📋 Review Answers", expanded=False):
-        for i, q in enumerate(questions):
-            chosen  = st.session_state.quiz_answers.get(i, "—")
-            correct = q["correct_answer"]
-            icon    = "✅" if chosen == correct else "❌"
-            st.markdown(
-                f"""<div class='quiz-card' style='padding:1.2rem;margin-bottom:.8rem'>
-                    <div style='font-size:.8rem;color:var(--text-dim);font-family:var(--font-mono);
-                                margin-bottom:.4rem'>Q{i+1} · {q['difficulty']}</div>
-                    <p style='font-weight:600;margin:0 0 .6rem'>{q['question']}</p>
-                    <div style='display:flex;gap:1rem;flex-wrap:wrap;font-family:var(--font-mono);
-                                font-size:.85rem'>
-                        <span>Your answer: <b style='color:{"var(--easy)" if chosen==correct else "var(--hard)"}'>{chosen}</b></span>
-                        <span>Correct: <b style='color:var(--easy)'>{correct}</b></span>
-                        <span>{icon}</span>
-                    </div>
-                    <div style='margin-top:.5rem;font-size:.82rem;color:var(--text-dim)'>
-                        💡 {q.get('explanation','')}</div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    if c1.button("🔄 Play Again",    use_container_width=True):
-        _reset_quiz()
-        st.rerun()
-    if c2.button("📜 My History",    use_container_width=True):
-        st.session_state.quiz_phase = "history"
-        st.rerun()
-    if c3.button("🏆 Leaderboard",   use_container_width=True):
-        st.session_state.quiz_phase = "leaderboard"
-        st.rerun()
+            st.stop()
+        if col2.button("🏆  Leaderboard", use_container_width=True, key="sel_lb"):
+            slot.empty()
+            st.session_state.quiz_phase = "leaderboard"
+            st.rerun()
+            st.stop()
+        st.divider()
+        if st.button("← Logout", use_container_width=True, key="sel_logout"):
+            slot.empty()
+            _reset_quiz()
+            st.session_state.page           = "login"
+            st.session_state.logged_in_user = None
+            st.rerun()
+            st.stop()
 
 
 # ── Phase: History ─────────────────────────────────────────────────────────────
 
 def _phase_history():
     username = st.session_state.get("logged_in_user", "anonymous")
-    st.markdown(f"<h2>📜 Quiz History — <span style='color:var(--accent)'>{username}</span></h2>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"<h2>📜 Quiz History — "
+        f"<span style='color:#7c5cfc'>{username}</span></h2>",
+        unsafe_allow_html=True,
+    )
 
     rows = get_user_history(username)
     if not rows:
-        st.info("You haven't completed any quizzes yet. Go play one!")
+        st.info("No quizzes completed yet. Go play one!")
     else:
-        # Summary metrics
+        avg  = sum(r["score"] for r in rows) / len(rows)
+        best = max(r["score"] for r in rows)
         m1, m2, m3, m4 = st.columns(4)
-        avg_score = sum(r["score"] for r in rows) / len(rows)
-        best      = max(r["score"] for r in rows)
-        m1.metric("Attempts",   len(rows))
-        m2.metric("Best Score", f"{best}/{TOTAL_QUESTIONS}")
-        m3.metric("Avg Score",  f"{avg_score:.1f}/{TOTAL_QUESTIONS}")
-        m4.metric("Topics played", len({r["topic"] for r in rows}))
+        m1.metric("Attempts",      len(rows))
+        m2.metric("Best Score",    f"{best}/{TOTAL_QUESTIONS}")
+        m3.metric("Avg Score",     f"{avg:.1f}/{TOTAL_QUESTIONS}")
+        m4.metric("Topics Played", len({r["topic"] for r in rows}))
 
         st.markdown("<br>", unsafe_allow_html=True)
-
-        # Table header
-        st.markdown(
-            """<div style='display:grid;grid-template-columns:2fr 1fr 1fr 60px 80px;
-                gap:.6rem;padding:.4rem .8rem;font-family:var(--font-mono);
-                font-size:.75rem;color:var(--text-dim);text-transform:uppercase'>
+        st.markdown("""
+            <div style='display:grid;grid-template-columns:2fr 1fr 1fr 60px 80px;
+                gap:.6rem;padding:.4rem .8rem;font-family:monospace;
+                font-size:.72rem;color:#7a7a9a;text-transform:uppercase'>
                 <span>Topic</span><span>Difficulty</span>
                 <span>Score</span><span>Time</span><span>Date</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+            </div>
+        """, unsafe_allow_html=True)
+
+        diff_colors = {"Easy": "#5cf8b0", "Medium": "#fcb05c", "Hard": "#fc5c7d"}
         for r in rows:
-            pct       = r["score"] / r["total"]
-            score_col = "var(--easy)" if pct >= 0.7 else "var(--medium)" if pct >= 0.5 else "var(--hard)"
-            diff_c    = {"Easy":"var(--easy)","Medium":"var(--medium)","Hard":"var(--hard)"}.get(r["difficulty"],"var(--text)")
-            label     = TOPIC_META.get(r["topic"], {}).get("label", r["topic"])
-            icon      = TOPIC_META.get(r["topic"], {}).get("icon", "📚")
-            date_str  = r["completed_at"].strftime("%d %b") if hasattr(r["completed_at"],"strftime") else str(r["completed_at"])[:10]
-            st.markdown(
-                f"""<div style='display:grid;grid-template-columns:2fr 1fr 1fr 60px 80px;
+            pct      = r["score"] / r["total"]
+            score_c  = "#5cf8b0" if pct >= 0.7 else "#fcb05c" if pct >= 0.5 else "#fc5c7d"
+            diff_c   = diff_colors.get(r["difficulty"], "#e8e8f0")
+            label    = TOPIC_META.get(r["topic"], {}).get("label", r["topic"])
+            icon     = TOPIC_META.get(r["topic"], {}).get("icon", "📚")
+            date_str = (r["completed_at"].strftime("%d %b")
+                        if hasattr(r["completed_at"], "strftime")
+                        else str(r["completed_at"])[:10])
+            st.markdown(f"""
+                <div style='display:grid;grid-template-columns:2fr 1fr 1fr 60px 80px;
                     gap:.6rem;align-items:center;padding:.75rem .8rem;
-                    background:var(--surface2);border:1px solid var(--border);
+                    background:#1c1c2a;border:1px solid #2a2a3d;
                     border-radius:12px;margin-bottom:.4rem'>
-                    <span style='font-weight:600'>{icon} {label}</span>
-                    <span style='color:{diff_c};font-family:var(--font-mono);font-size:.82rem'>{r['difficulty']}</span>
-                    <span style='color:{score_col};font-family:var(--font-mono);font-weight:700'>{r['score']}/{r['total']}</span>
-                    <span style='font-family:var(--font-mono);font-size:.8rem;color:var(--text-dim)'>{_fmt_time(r['time_taken_s'])}</span>
-                    <span style='font-size:.78rem;color:var(--text-dim);font-family:var(--font-mono)'>{date_str}</span>
-                </div>""",
-                unsafe_allow_html=True,
-            )
+                    <span style='font-weight:600;color:#e8e8f0'>{icon} {label}</span>
+                    <span style='color:{diff_c};font-family:monospace;font-size:.82rem'>{r['difficulty']}</span>
+                    <span style='color:{score_c};font-family:monospace;font-weight:700'>{r['score']}/{r['total']}</span>
+                    <span style='font-family:monospace;font-size:.8rem;color:#7a7a9a'>{_fmt_time(r['time_taken_s'])}</span>
+                    <span style='font-size:.78rem;color:#7a7a9a;font-family:monospace'>{date_str}</span>
+                </div>
+            """, unsafe_allow_html=True)
 
     st.divider()
     c1, c2 = st.columns(2)
-    if c1.button("← Back",          use_container_width=True):
+    if c1.button("← Back", use_container_width=True, key="hist_back"):
         st.session_state.quiz_phase = "select"
         st.rerun()
-    if c2.button("🏆 Leaderboard",   use_container_width=True):
+        st.stop()
+    if c2.button("🏆 Leaderboard", use_container_width=True, key="hist_lb"):
         st.session_state.quiz_phase = "leaderboard"
         st.rerun()
-
-
-# ── Phase: Leaderboard ─────────────────────────────────────────────────────────
-
-def _phase_leaderboard():
-    st.markdown("<h2>🏆 Global Leaderboard</h2>", unsafe_allow_html=True)
-
-    rows = get_leaderboard(20)
-    if not rows:
-        st.info("No scores yet — be the first to complete a quiz!")
-    else:
-        # Podium top-3
-        podium = rows[:3]
-        pcols  = st.columns(len(podium))
-        medals = ["🥇","🥈","🥉"]
-        for col, row, medal in zip(pcols, podium, medals):
-            pct = row["score"] / row["total"]
-            col.markdown(
-                f"""<div style='background:var(--surface);border:1.5px solid var(--border);
-                    border-radius:18px;padding:1.4rem;text-align:center'>
-                    <div style='font-size:2rem'>{medal}</div>
-                    <div style='font-weight:800;font-size:1rem;margin:.3rem 0'>{row['username']}</div>
-                    <div style='font-family:var(--font-mono);font-size:1.5rem;font-weight:700;
-                                color:var(--accent)'>{row['score']}/{row['total']}</div>
-                    <div style='font-size:.75rem;color:var(--text-dim);margin-top:.3rem'>
-                        {TOPIC_META.get(row['topic'],{}).get('label',row['topic'])} · {row['difficulty']}</div>
-                    <div style='font-size:.72rem;color:var(--text-dim);font-family:var(--font-mono)'>
-                        ⏱ {_fmt_time(row['time_taken_s'])}</div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Full table header
-        st.markdown(
-            """<div style='display:grid;grid-template-columns:40px 1fr 1.2fr 1fr 60px 80px 80px;
-                gap:.6rem;padding:.4rem .8rem;font-family:var(--font-mono);
-                font-size:.72rem;color:var(--text-dim);text-transform:uppercase'>
-                <span>#</span><span>Player</span><span>Topic</span>
-                <span>Difficulty</span><span>Score</span><span>Time</span><span>Date</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-        logged_user = st.session_state.get("logged_in_user","")
-        for row in rows:
-            label     = TOPIC_META.get(row["topic"],{}).get("label", row["topic"])
-            icon      = TOPIC_META.get(row["topic"],{}).get("icon","📚")
-            diff_c    = {"Easy":"var(--easy)","Medium":"var(--medium)","Hard":"var(--hard)"}.get(row["difficulty"],"var(--text)")
-            pct       = row["score"] / row["total"]
-            score_col = "var(--easy)" if pct >= 0.7 else "var(--medium)" if pct >= 0.5 else "var(--hard)"
-            date_str  = row["completed_at"].strftime("%d %b") if hasattr(row["completed_at"],"strftime") else str(row["completed_at"])[:10]
-            is_me     = row["username"] == logged_user
-            border    = "var(--accent)" if is_me else "var(--border)"
-            bg        = "rgba(124,92,252,.08)" if is_me else "var(--surface2)"
-            rank_colors = {1:"#ffd700",2:"#c0c0c0",3:"#cd7f32"}
-            rank_col  = rank_colors.get(row["rank"],"var(--text-dim)")
-            st.markdown(
-                f"""<div style='display:grid;grid-template-columns:40px 1fr 1.2fr 1fr 60px 80px 80px;
-                    gap:.6rem;align-items:center;padding:.7rem .8rem;
-                    background:{bg};border:1px solid {border};
-                    border-radius:12px;margin-bottom:.4rem'>
-                    <span style='font-family:var(--font-mono);font-weight:700;color:{rank_col};text-align:center'>{row['rank']}</span>
-                    <span style='font-weight:{"800" if is_me else "500"}'>{row['username']}{"  ← you" if is_me else ""}</span>
-                    <span style='font-size:.82rem'>{icon} {label}</span>
-                    <span style='color:{diff_c};font-family:var(--font-mono);font-size:.82rem'>{row['difficulty']}</span>
-                    <span style='color:{score_col};font-family:var(--font-mono);font-weight:700;text-align:right'>{row['score']}/{row['total']}</span>
-                    <span style='font-family:var(--font-mono);font-size:.78rem;color:var(--text-dim);text-align:right'>{_fmt_time(row['time_taken_s'])}</span>
-                    <span style='font-size:.75rem;color:var(--text-dim);font-family:var(--font-mono);text-align:right'>{date_str}</span>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-
-    st.divider()
-    c1, c2 = st.columns(2)
-    if c1.button("← Back",        use_container_width=True):
-        st.session_state.quiz_phase = "select"
-        st.rerun()
-    if c2.button("📜 My History",  use_container_width=True):
-        st.session_state.quiz_phase = "history"
-        st.rerun()
+        st.stop()
 
 
 # ── Public entry-point ─────────────────────────────────────────────────────────
 
 def page_quiz():
-    """Called from App.py when st.session_state.page == 'quiz'."""
     _init_quiz_state()
-
     phase = st.session_state.quiz_phase
-    {
-        "select":      _phase_select,
-        "playing":     _phase_playing,
-        "result":      _phase_result,
-        "history":     _phase_history,
-        "leaderboard": _phase_leaderboard,
-    }[phase]()
+
+    # Playing and result are completely isolated — nothing from select can appear
+    if phase in ("playing", "result"):
+        Play.render()
+        st.stop()
+        return
+
+    if phase == "select":
+        _phase_select()
+    elif phase == "history":
+        _phase_history()
+    elif phase == "leaderboard":
+        page_leaderboard(back_phase="select")
+    else:
+        st.warning(f"Unknown phase '{phase}'. Resetting.")
+        _reset_quiz()
+        st.rerun()
+        st.stop()

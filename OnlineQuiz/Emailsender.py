@@ -92,7 +92,8 @@ Support Team — Online Quiz
     send_mail(email, "Welcome to Online Quiz Competition", body)
 
 def send_password_reset_mail(email: str):
-    body=f"""Dear User,
+    user=find_user_by_email(email)
+    body=f"""Dear {user[1]},
 
 We wanted to let you know that your account password was successfully changed.
 
