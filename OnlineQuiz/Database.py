@@ -7,7 +7,7 @@ from Config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
 
 # ── Connection ─────────────────────────────────────────────────────────────────
 
-@st.cache_resource
+'''@st.cache_resource
 def get_db():
     """Return a single cached DB connection for the lifetime of the server."""
     return mysql.connector.connect(
@@ -15,7 +15,19 @@ def get_db():
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
-    )
+    )'''
+@st.cache_resource
+def get_db():
+    try:
+        return mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+        )
+    except Exception as e:
+        st.error(f"MySQL Error: {e}")
+        raise
 
 
 def get_cursor():
