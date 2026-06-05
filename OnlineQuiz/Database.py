@@ -43,16 +43,15 @@ def ensure_scores_table():
     db  = get_db()
     cur = get_cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS quiz_scores (
-            id            INT AUTO_INCREMENT PRIMARY KEY,
-            username      VARCHAR(150) NOT NULL,
-            topic         VARCHAR(60)  NOT NULL,
-            difficulty    ENUM('Easy','Medium','Hard') NOT NULL,
-            score         TINYINT      NOT NULL,
-            total         TINYINT      NOT NULL DEFAULT 15,
-            time_taken_s  SMALLINT     NOT NULL,
-            completed_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
+    CREATE TABLE IF NOT EXISTS quiz_scores (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(150),
+    topic VARCHAR(60),
+    difficulty ENUM('Easy','Medium','Hard'),
+    score TINYINT,
+    total TINYINT,
+    time_taken_s SMALLINT,
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
     """)
     db.commit()
 
